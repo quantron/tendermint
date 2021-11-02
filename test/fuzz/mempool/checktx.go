@@ -2,7 +2,6 @@ package mempool
 
 import (
 	"context"
-	"testing"
 
 	abciclient "github.com/tendermint/tendermint/abci/client"
 	"github.com/tendermint/tendermint/abci/example/kvstore"
@@ -26,7 +25,6 @@ func init() {
 	cfg := config.DefaultMempoolConfig()
 	cfg.Broadcast = false
 
-	testing.Init()
 	getMp = func() mempool.Mempool {
 		if mp == nil {
 			mp = mempool.NewTxMempool(
