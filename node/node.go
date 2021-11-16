@@ -855,6 +855,24 @@ func (n *nodeImpl) OnStop() {
 	}
 }
 
+type authChecker struct {
+	ProxyAppQuery proxy.AppConnQuery
+}
+
+func (ac *authChecker) IsAuthorized(address string, data []byte, signature []byte) (bool, error) {
+	response, err := ac.ProxyAppQuery.QuerySync(abci.RequestQuery{
+		Path:   "/custom/access/isAuthorized/" + address,
+		Data:   data,
+		Height: 0,
+		Prove:  false,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return response.Code == 0, nil
+}
+
 func (n *nodeImpl) startRPC() ([]net.Listener, error) {
 	if n.config.Mode == config.ModeValidator {
 		pubKey, err := n.privValidator.GetPubKey(context.TODO())
@@ -873,6 +891,8 @@ func (n *nodeImpl) startRPC() ([]net.Listener, error) {
 	if n.config.RPC.Unsafe {
 		n.rpcEnv.AddUnsafe(routes)
 	}
+
+	rpcserver.SetAuthorizationChecker(&authChecker{ProxyAppQuery: n.proxyApp.Query()})
 
 	cfg := rpcserver.DefaultConfig()
 	cfg.MaxBodyBytes = n.config.RPC.MaxBodyBytes
