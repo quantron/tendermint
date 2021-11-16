@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"golang.org/x/net/netutil"
 
+	"github.com/rs/cors"
 	"github.com/tendermint/tendermint/libs/log"
 	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
 )
@@ -45,6 +47,19 @@ func DefaultConfig() *Config {
 	}
 }
 
+type AuthorizationChecker interface {
+	IsAuthorized(address string, data []byte, signature []byte) (bool, error)
+}
+
+var (
+	// set by Node
+	authChecker AuthorizationChecker
+)
+
+func SetAuthorizationChecker(checker AuthorizationChecker) {
+	authChecker = checker
+}
+
 // Serve creates a http.Server and calls Serve with the given listener. It
 // wraps handler with RecoverAndLogHandler and a handler, which limits the max
 // body size to config.MaxBodyBytes.
@@ -53,7 +68,7 @@ func DefaultConfig() *Config {
 func Serve(listener net.Listener, handler http.Handler, logger log.Logger, config *Config) error {
 	logger.Info(fmt.Sprintf("Starting RPC HTTP server on %s", listener.Addr()))
 	s := &http.Server{
-		Handler:        RecoverAndLogHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}, logger),
+		Handler:        RecoverAndLogHandler(wrapHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}), logger),
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
@@ -78,7 +93,7 @@ func ServeTLS(
 	logger.Info(fmt.Sprintf("Starting RPC HTTPS server on %s (cert: %q, key: %q)",
 		listener.Addr(), certFile, keyFile))
 	s := &http.Server{
-		Handler:        RecoverAndLogHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}, logger),
+		Handler:        RecoverAndLogHandler(wrapHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}), logger),
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
@@ -224,6 +239,57 @@ func (w *responseWriterWrapper) WriteHeader(status int) {
 // implements http.Hijacker
 func (w *responseWriterWrapper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return w.ResponseWriter.(http.Hijacker).Hijack()
+}
+
+func wrapHandler(handler http.Handler) http.Handler {
+	corsMiddleware := cors.New(cors.Options{
+		AllowedOrigins: []string{},
+		AllowedMethods: []string{http.MethodHead, http.MethodGet, http.MethodPost},
+		AllowedHeaders: []string{"Origin", "Accept", "Content-Type", "X-Requested-With", "X-Server-Time", "Meraki-Signer", "Meraki-Sign"},
+	})
+
+	return corsMiddleware.Handler(authorizationHandler{h: handler})
+}
+
+func getSignature(r *http.Request) string {
+	queryMap, _ := url.ParseQuery(r.URL.RawQuery)
+	sign := queryMap.Get("meraki-sign")
+
+	if sign != "" {
+		return sign
+	}
+
+	return r.Header.Get("Meraki-Sign")
+}
+
+type authorizationHandler struct {
+	h http.Handler
+}
+
+func isRequestAuthorized(r *http.Request) bool {
+	if authChecker == nil {
+		return false
+	}
+
+	ok, _ := authChecker.IsAuthorized("", []byte{}, []byte{})
+	if !ok {
+		return false
+	}
+
+	sign := getSignature(r)
+
+	return sign == "SIGNATURE"
+}
+
+func (h authorizationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !isRequestAuthorized(r) {
+		w.Header().Set("Content-Type", "application/json")
+		res := types.RPCInvalidRequestError(nil, fmt.Errorf("Error unauthorized"))
+		WriteRPCResponseHTTPError(w, http.StatusUnauthorized, res)
+		return
+	}
+
+	h.h.ServeHTTP(w, r)
 }
 
 type maxBytesHandler struct {

@@ -999,6 +999,24 @@ func (n *Node) OnStop() {
 	}
 }
 
+type authChecker struct {
+	ProxyAppQuery proxy.AppConnQuery
+}
+
+func (ac *authChecker) IsAuthorized(address string, data []byte, signature []byte) (bool, error) {
+	response, err := ac.ProxyAppQuery.QuerySync(abci.RequestQuery{
+		Path:   "/custom/access/isAuthorized/" + address,
+		Data:   data,
+		Height: 0,
+		Prove:  false,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return response.Code == 0, nil
+}
+
 // ConfigureRPC makes sure RPC has all the objects it needs to operate.
 func (n *Node) ConfigureRPC() error {
 	pubKey, err := n.privValidator.GetPubKey()
@@ -1028,6 +1046,7 @@ func (n *Node) ConfigureRPC() error {
 
 		Config: *n.config.RPC,
 	})
+	rpcserver.SetAuthorizationChecker(&authChecker{ProxyAppQuery: n.proxyApp.Query()})
 	return nil
 }
 
