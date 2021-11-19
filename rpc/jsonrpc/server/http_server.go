@@ -3,12 +3,15 @@ package server
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -18,6 +21,7 @@ import (
 
 	"github.com/rs/cors"
 	"github.com/tendermint/tendermint/libs/log"
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 	types "github.com/tendermint/tendermint/rpc/jsonrpc/types"
 )
 
@@ -48,7 +52,7 @@ func DefaultConfig() *Config {
 }
 
 type AuthorizationChecker interface {
-	IsAuthorized(address string, data []byte, signature []byte) (bool, error)
+	IsAuthorized(query *tmproto.AuthQuery) (bool, error)
 }
 
 var (
@@ -68,7 +72,7 @@ func SetAuthorizationChecker(checker AuthorizationChecker) {
 func Serve(listener net.Listener, handler http.Handler, logger log.Logger, config *Config) error {
 	logger.Info(fmt.Sprintf("Starting RPC HTTP server on %s", listener.Addr()))
 	s := &http.Server{
-		Handler:        RecoverAndLogHandler(wrapHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}), logger),
+		Handler:        RecoverAndLogHandler(maxBytesHandler{h: wrapHandler(handler), n: config.MaxBodyBytes}, logger),
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
@@ -93,7 +97,7 @@ func ServeTLS(
 	logger.Info(fmt.Sprintf("Starting RPC HTTPS server on %s (cert: %q, key: %q)",
 		listener.Addr(), certFile, keyFile))
 	s := &http.Server{
-		Handler:        RecoverAndLogHandler(wrapHandler(maxBytesHandler{h: handler, n: config.MaxBodyBytes}), logger),
+		Handler:        RecoverAndLogHandler(maxBytesHandler{h: wrapHandler(handler), n: config.MaxBodyBytes}, logger),
 		ReadTimeout:    config.ReadTimeout,
 		WriteTimeout:   config.WriteTimeout,
 		MaxHeaderBytes: config.MaxHeaderBytes,
@@ -245,45 +249,107 @@ func wrapHandler(handler http.Handler) http.Handler {
 	corsMiddleware := cors.New(cors.Options{
 		AllowedOrigins: []string{},
 		AllowedMethods: []string{http.MethodHead, http.MethodGet, http.MethodPost},
-		AllowedHeaders: []string{"Origin", "Accept", "Content-Type", "X-Requested-With", "X-Server-Time", "Meraki-Signer", "Meraki-Sign"},
+		AllowedHeaders: []string{"Origin", "Accept", "Content-Type", "X-Requested-With", "X-Server-Time", "Meraki-PubKey", "Meraki-Signature"},
 	})
 
 	return corsMiddleware.Handler(authorizationHandler{h: handler})
 }
 
-func getSignature(r *http.Request) string {
-	queryMap, _ := url.ParseQuery(r.URL.RawQuery)
-	sign := queryMap.Get("meraki-sign")
+type SignatureInfo struct {
+	PubKey    []byte
+	Signature []byte
+}
 
-	if sign != "" {
-		return sign
+type bodyBuffer struct {
+	Reader io.Reader
+	Closer io.Closer
+}
+
+func (bb *bodyBuffer) Read(p []byte) (n int, err error) {
+	return bb.Reader.Read(p)
+}
+
+func (bb *bodyBuffer) Close() error {
+	return bb.Closer.Close()
+}
+
+func getRequestData(r *http.Request) ([]byte, error) {
+	dataBytes, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
 	}
 
-	return r.Header.Get("Meraki-Sign")
+	r.Body = &bodyBuffer{
+		Reader: bytes.NewReader(dataBytes),
+		Closer: r.Body,
+	}
+
+	url := r.URL.Path + r.URL.RawQuery
+	return append(append([]byte(url), 0), dataBytes...), nil
+}
+
+func getSignatureInfo(r *http.Request) (*SignatureInfo, error) {
+	signer := r.Header.Get("Meraki-PubKey")
+	if signer == "" {
+		return nil, fmt.Errorf("Meraki-PubKey header not specified")
+	}
+
+	pubkeyBytes, err := base64.StdEncoding.DecodeString(signer)
+	if err != nil {
+		return nil, err
+	}
+
+	signature := r.Header.Get("Meraki-Signature")
+	if signature == "" {
+		return nil, fmt.Errorf("Meraki-Signature header not specified")
+	}
+
+	signatureBytes, err2 := base64.StdEncoding.DecodeString(signature)
+	if err2 != nil {
+		return nil, err2
+	}
+
+	return &SignatureInfo{pubkeyBytes, signatureBytes}, nil
 }
 
 type authorizationHandler struct {
 	h http.Handler
 }
 
-func isRequestAuthorized(r *http.Request) bool {
+func isAuthorized(signatureInfo *SignatureInfo, data []byte) bool {
 	if authChecker == nil {
 		return false
 	}
 
-	ok, _ := authChecker.IsAuthorized("", []byte{}, []byte{})
-	if !ok {
-		return false
+	query := &tmproto.AuthQuery{
+		Data:      data,
+		PubKey:    signatureInfo.PubKey,
+		Signature: signatureInfo.Signature,
 	}
+	fmt.Printf("query:%v\n", query)
 
-	sign := getSignature(r)
-
-	return sign == "SIGNATURE"
+	ok, _ := authChecker.IsAuthorized(query)
+	return ok
 }
 
 func (h authorizationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !isRequestAuthorized(r) {
-		w.Header().Set("Content-Type", "application/json")
+	data, errData := getRequestData(r)
+	if errData != nil {
+		res := types.RPCInvalidRequestError(nil,
+			fmt.Errorf("error reading request body: %w", errData),
+		)
+		WriteRPCResponseHTTPError(w, http.StatusBadRequest, res)
+		return
+	}
+
+	signInfo, err := getSignatureInfo(r)
+	if err != nil {
+		WriteRPCResponseHTTPError(w, http.StatusBadRequest, types.RPCInvalidRequestError(nil, err))
+		return
+	}
+
+	if !isAuthorized(signInfo, data) {
+		// w.Header().Set("Content-Type", "application/json")
 		res := types.RPCInvalidRequestError(nil, fmt.Errorf("Error unauthorized"))
 		WriteRPCResponseHTTPError(w, http.StatusUnauthorized, res)
 		return

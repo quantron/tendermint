@@ -49,6 +49,8 @@ import (
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
 	"github.com/tendermint/tendermint/version"
+
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
 )
 
 //------------------------------------------------------------------------------
@@ -1003,9 +1005,14 @@ type authChecker struct {
 	ProxyAppQuery proxy.AppConnQuery
 }
 
-func (ac *authChecker) IsAuthorized(address string, data []byte, signature []byte) (bool, error) {
+func (ac *authChecker) IsAuthorized(query *tmproto.AuthQuery) (bool, error) {
+	data, err := query.Marshal()
+	if err != nil {
+		return false, err
+	}
+
 	response, err := ac.ProxyAppQuery.QuerySync(abci.RequestQuery{
-		Path:   "/custom/access/isAuthorized/" + address,
+		Path:   "/custom/access/isAuthorized",
 		Data:   data,
 		Height: 0,
 		Prove:  false,
