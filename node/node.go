@@ -38,6 +38,8 @@ import (
 	rpcserver "github.com/tendermint/tendermint/rpc/jsonrpc/server"
 	"github.com/tendermint/tendermint/types"
 
+	tmproto "github.com/tendermint/tendermint/proto/tendermint/types"
+
 	_ "net/http/pprof" // nolint: gosec // securely exposed on separate, optional port
 
 	_ "github.com/lib/pq" // provide the psql db driver
@@ -859,9 +861,14 @@ type authChecker struct {
 	ProxyAppQuery proxy.AppConnQuery
 }
 
-func (ac *authChecker) IsAuthorized(address string, data []byte, signature []byte) (bool, error) {
+func (ac *authChecker) IsAuthorized(query *tmproto.AuthQuery) (bool, error) {
+	data, err := query.Marshal()
+	if err != nil {
+		return false, err
+	}
+
 	response, err := ac.ProxyAppQuery.QuerySync(abci.RequestQuery{
-		Path:   "/custom/access/isAuthorized/" + address,
+		Path:   "/custom/access/isAuthorized",
 		Data:   data,
 		Height: 0,
 		Prove:  false,
