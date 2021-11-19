@@ -338,18 +338,20 @@ func (h authorizationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		res := types.RPCInvalidRequestError(nil,
 			fmt.Errorf("error reading request body: %w", errData),
 		)
+		w.Header().Set("Content-Type", "application/json")
 		WriteRPCResponseHTTPError(w, http.StatusBadRequest, res)
 		return
 	}
 
 	signInfo, err := getSignatureInfo(r)
 	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
 		WriteRPCResponseHTTPError(w, http.StatusBadRequest, types.RPCInvalidRequestError(nil, err))
 		return
 	}
 
 	if !isAuthorized(signInfo, data) {
-		// w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json")
 		res := types.RPCInvalidRequestError(nil, fmt.Errorf("Error unauthorized"))
 		WriteRPCResponseHTTPError(w, http.StatusUnauthorized, res)
 		return
