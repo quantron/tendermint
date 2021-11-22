@@ -339,9 +339,9 @@ type authorizationHandler struct {
 	h http.Handler
 }
 
-func isAuthorized(signatureInfo *SignatureInfo, data []byte) bool {
+func isAuthorized(signatureInfo *SignatureInfo, data []byte) (bool, error) {
 	if authChecker == nil {
-		return false
+		return false, fmt.Errorf("Access checker not initialized")
 	}
 
 	query := &tmproto.AuthQuery{
@@ -349,10 +349,8 @@ func isAuthorized(signatureInfo *SignatureInfo, data []byte) bool {
 		PubKey:    signatureInfo.PubKey,
 		Signature: signatureInfo.Signature,
 	}
-	fmt.Printf("query:%v\n", query)
 
-	ok, _ := authChecker.IsAuthorized(query)
-	return ok
+	return authChecker.IsAuthorized(query)
 }
 
 func (h authorizationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -373,9 +371,9 @@ func (h authorizationHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !isAuthorized(signInfo, data) {
+	if ok, err := isAuthorized(signInfo, data); !ok {
 		w.Header().Set("Content-Type", "application/json")
-		res := rpctypes.RPCInvalidRequestError(nil, fmt.Errorf("Error unauthorized"))
+		res := rpctypes.RPCInvalidRequestError(nil, err)
 		WriteRPCResponseHTTPError(w, res)
 		return
 	}
