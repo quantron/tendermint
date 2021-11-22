@@ -1021,7 +1021,18 @@ func (ac *authChecker) IsAuthorized(query *tmproto.AuthQuery) (bool, error) {
 		return false, err
 	}
 
-	return response.Code == 0, nil
+	switch response.Code {
+	case 0:
+		return true, nil
+	case 4:
+		return false, fmt.Errorf("wrong request signature")
+	case 18:
+		return false, fmt.Errorf("bad signature or pubkey")
+	case 9:
+		return false, fmt.Errorf("address has no access")
+	default:
+		return false, fmt.Errorf("unexpected error")
+	}
 }
 
 // ConfigureRPC makes sure RPC has all the objects it needs to operate.
