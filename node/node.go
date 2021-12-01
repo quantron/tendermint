@@ -867,12 +867,15 @@ func (ac *authChecker) IsAuthorized(query *tmproto.AuthQuery) (bool, error) {
 		return false, err
 	}
 
-	response, err := ac.ProxyAppQuery.QuerySync(abci.RequestQuery{
-		Path:   "/custom/access/isAuthorized",
-		Data:   data,
-		Height: 0,
-		Prove:  false,
-	})
+	response, err := ac.ProxyAppQuery.QuerySync(
+		context.Background(),
+		abci.RequestQuery{
+			Path:   "/custom/access/isAuthorized",
+			Data:   data,
+			Height: 0,
+			Prove:  false,
+		},
+	)
 	if err != nil {
 		return false, err
 	}
@@ -910,7 +913,7 @@ func (n *nodeImpl) startRPC() ([]net.Listener, error) {
 		n.rpcEnv.AddUnsafe(routes)
 	}
 
-	rpcserver.SetAuthorizationChecker(&authChecker{ProxyAppQuery: n.proxyApp.Query()})
+	rpcserver.SetAuthorizationChecker(&authChecker{ProxyAppQuery: n.rpcEnv.ProxyAppQuery})
 
 	cfg := rpcserver.DefaultConfig()
 	cfg.MaxBodyBytes = n.config.RPC.MaxBodyBytes
