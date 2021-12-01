@@ -231,7 +231,7 @@ func DefaultBaseConfig() BaseConfig {
 		LogLevel:           DefaultLogLevel,
 		LogFormat:          LogFormatPlain,
 		FastSyncMode:       true,
-		FilterPeers:        false,
+		FilterPeers:        true,
 		DBBackend:          "goleveldb",
 		DBPath:             "data",
 	}
