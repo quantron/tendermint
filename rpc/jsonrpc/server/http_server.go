@@ -307,7 +307,11 @@ func getRequestData(r *http.Request) ([]byte, error) {
 		Closer: r.Body,
 	}
 
-	url := r.URL.Path + r.URL.RawQuery
+	url := r.URL.Path
+	if r.URL.RawQuery != "" {
+		url += "?" + r.URL.RawQuery
+	}
+
 	return append(append([]byte(url), 0), dataBytes...), nil
 }
 
