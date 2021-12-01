@@ -254,7 +254,7 @@ func DefaultBaseConfig() BaseConfig {
 		ABCI:        "socket",
 		LogLevel:    DefaultLogLevel,
 		LogFormat:   log.LogFormatPlain,
-		FilterPeers: false,
+		FilterPeers: true,
 		DBBackend:   "goleveldb",
 		DBPath:      "data",
 	}
